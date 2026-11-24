@@ -1,38 +1,35 @@
-import json
 from pathlib import Path
 from traceback import print_exc
 
-from core.queueing import QUEUE, broker
+from core.queueing import broker, finish_job, pull_job, requeue_processing
 from domain.learning import calculate
 
 pulse = Path('/tmp/compute-heartbeat')
+
 
 def serve():
     while True:
         broker.ping()
         pulse.touch()
-        item = broker.blmove(QUEUE, f'{QUEUE}:processing', timeout=2, src='LEFT', dest='RIGHT')
-        if item is None:
+        job, item = pull_job()
+        if job is None:
             continue
-        job = json.loads(item)
-        status = {'owner': job['owner'], 'input': job['input']}
         try:
-            status.update(status='ready', result=calculate(job['input']))
+            result = calculate(job['input'])
+            accepted = finish_job(job, item, 'ready', result)
         except ValueError as exc:
-            status.update(status='rejected', detail=str(exc))
+            accepted = finish_job(job, item, 'rejected', {'detail': str(exc)})
         except Exception:
             print_exc()
-            status.update(status='rejected', detail='计算失败，请检查输入和 worker 日志')
-        with broker.pipeline() as pipe:
-            pipe.set(f'compute:{job["token"]}', json.dumps(status, allow_nan=False), ex=86400)
-            pipe.lrem(f'{QUEUE}:processing', 1, item)
-            pipe.execute()
+            accepted = finish_job(job, item, 'rejected',
+                                  {'detail': '计算失败，请检查输入和 worker 日志'})
+        if not accepted:
+            # 任务已被接手：原机器的结果按规则丢弃，仅留 worker 侧痕迹。
+            print(f"stale result discarded for taken-over compute {job['token']} "
+                  f"attempt {job['attempt']}")
         pulse.touch()
 
+
 if __name__ == '__main__':
-    for raw in broker.lrange(f'{QUEUE}:processing', 0, -1):
-        with broker.pipeline() as pipe:
-            pipe.lpush(QUEUE, raw)
-            pipe.lrem(f'{QUEUE}:processing', 1, raw)
-            pipe.execute()
+    requeue_processing()
     serve()

@@ -54,7 +54,20 @@ Compose 运行 Nginx、Python FastAPI、独立 Redis 消费进程、SQL 数据�
 | 节目时段表 | `/airslots` /airslots/mark-offline | `frontend/src/pages/airslots.js` |
 | 蓄电班记与测量 | `/battery_logs` /battery_logs/log-charge，/battery_logs/approve-meter | `frontend/src/pages/battery_logs.js` |
 | 备用分钟核算 | `/reserves` /reserves/forecast-wh，/reserves/save-reserve | `frontend/src/pages/reserves.js` |
+| 计算中断接手 | `/compute/{token}` /compute/{token}/takeover | `frontend/src/pages/reserves.js` |
 | 班组备播卡 | `/switchcards` /switchcards/issue-switch，/switchcards/handover | `frontend/src/pages/switchcards.js` |
+
+## 中断续跑与幂等
+
+备用电量算到一半原机器断线时，凭原计算号即可接手，不需要重开评估。
+
+- **沿用原计算号与审签读数**：提交时输入（节目时段、整点评签读数、晴天标记）已冻结进任务，接手只递增 `attempt`（时代号），`token` 与输入快照不变。
+- **原机器结果不再采用**：worker 回写带时代栅栏（Redis `WATCH/MULTI` 比对 `status`+`attempt`）。接手一旦发生，`attempt` 自增，原机器随后交回的结果因时代号过期被静默丢弃，无法覆盖新任务。
+- **断线重试不新增评估**：`forecast-wh` 按“提交人 + 输入指纹”做幂等键，同一输入重试直接返回原计算号（响应带 `reused: true`），不重复入队、不重复写审计。
+- **已备案返回原单**：`save-reserve` 先按计算号查 `reserves`，命中即返回原记录（`reused: true`），不插入、不重复留痕；并发撞唯一约束时回查已落库原单。
+- **崩溃自动续跑**：worker 启动时把 `processing` 中与当前时代号一致的遗留任务递增时代号重新入队，过期条目直接剔除。
+- **页面可查可接手**：备用核算页可按计算号查询（含 `attempt`、`takeovers`、当前状态），中断后一键接手，算完即可备案。`running` 任务在 120 秒租期内受保护，超时（疑似僵死）才允许接手。
+- **归属不变**：`submitter` 始终是原提交人，接手只更新本轮执行者 `owner`；提交人与复核员可查看/接手，只读访客无权。
 
 SQL 实体与约束在 `backend/domain` 下维护。前端使用原生 ES modules。核心算子为 Fourier 基 + OLS。OLS 在训练时段拟合一、二阶谐波和晴天标记。备用量为截零后的点预测加末 6 小时 MAE。
 

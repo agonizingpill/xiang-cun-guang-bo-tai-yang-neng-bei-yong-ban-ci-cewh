@@ -1,4 +1,4 @@
-import {awaitCompute, request} from './api.js';
+import {awaitCompute, request, takeover} from './api.js';
 import {el, display} from './dom.js';
 import {COMPUTE_STATES, evidence} from './store.js';
 import {status} from './widgets.js';
@@ -22,6 +22,13 @@ function parse(form, fields) {
     return [field.name, convert(raw)];
   }));
 }
+function computeSummary(data) {
+  const state = COMPUTE_STATES[data.status] || data.status;
+  const taken = data.takeovers > 0 ? ` · 已接手 ${data.takeovers} 次（第 ${data.attempt} 轮）` : '';
+  const detail = data.status === 'ready' ? ' · ' + display(data.result)
+    : data.status === 'rejected' ? ' · ' + (data.detail || '') : '';
+  return `任务 ${data.token} · ${state}${taken}${detail}`;
+}
 export function actionForm(action, refresh) {
   const notice = status('');
   const button = el('button', {type:'submit'}, action.label);
@@ -35,16 +42,49 @@ export function actionForm(action, refresh) {
     button.disabled = true;
     notice.className = 'status';
     try {
-      const data = await request(action.path, parse(form, action.fields));
-      if (data.token && data.status === 'queued') {
+      const values = parse(form, action.fields);
+      // 按计算号查询：只看状态，不触发任何写入。
+      if (action.kind === 'lookup') {
+        const data = await request('/compute/' + values[action.fields[0].name]);
+        notice.textContent = computeSummary(data);
+        notice.classList.add(data.status === 'rejected' ? 'error' : 'ok');
+        return;
+      }
+      // 接手续跑：沿用原计算号，成功后等待新一轮结果。
+      if (action.kind === 'takeover') {
+        const data = await takeover(values[action.fields[0].name]);
         evidence.save(data.token);
+        notice.textContent = '已接手，沿用计算号 ' + data.token;
         const result = await awaitCompute(data.token, current => {
-          notice.textContent = COMPUTE_STATES[current.status] || current.status;
+          notice.textContent = computeSummary(current);
         });
         if (result.status === 'rejected') throw new Error(result.detail);
-        notice.textContent = '任务 ' + data.token + ' · ' + display(result.result);
+        notice.textContent = computeSummary(result);
+        notice.classList.add('ok');
+        await refresh();
+        return;
+      }
+      const data = await request(action.path, values);
+      if (data.token && (data.status === 'queued' || data.status === 'running')) {
+        evidence.save(data.token);
+        if (data.reused) {
+          notice.textContent = '断线重试，沿用原计算号 ' + data.token;
+        }
+        const result = await awaitCompute(data.token, current => {
+          notice.textContent = computeSummary(current);
+        });
+        if (result.status === 'rejected') throw new Error(result.detail);
+        notice.textContent = computeSummary(result);
+      } else if (data.token && data.status === 'ready') {
+        // 幂等重试命中了已算完的原任务：直接展示原结果，不新增评估。
+        evidence.save(data.token);
+        notice.textContent = (data.reused ? '断线重试，沿用原计算号。' : '') + computeSummary(data);
+      } else if (data.token && data.status === 'rejected') {
+        evidence.save(data.token);
+        throw new Error('原计算号此前已被拒绝：' + (data.detail || '未知原因'));
       } else {
-        notice.textContent = action.success + ' · ' + display(data.code ?? data.status);
+        const reused = data.reused ? '（已备案，返回原单） · ' : ' · ';
+        notice.textContent = action.success + reused + display(data.code ?? data.status);
       }
       notice.classList.add('ok');
       await refresh();

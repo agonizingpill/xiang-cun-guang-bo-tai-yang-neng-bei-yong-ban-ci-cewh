@@ -85,12 +85,51 @@
           "initial": ""
         }
       ],
-      "help": "按调班时对应的许可情况留下备用评估。",
+      "help": "按调班时对应的许可情况留下备用评估。已备案的计算号重试会返回原单，不新增评估。",
       "roles": [
         "operator",
         "reviewer"
       ],
       "success": "已写入"
+    },
+    {
+      "name": "lookup_compute",
+      "label": "按计算号查询任务",
+      "kind": "lookup",
+      "fields": [
+        {
+          "name": "token",
+          "label": "计算号",
+          "kind": "token",
+          "initial": ""
+        }
+      ],
+      "help": "查看计算号当前状态；任务被接手后会显示接手轮次，算完即可备案。",
+      "roles": [
+        "operator",
+        "reviewer",
+        "viewer"
+      ],
+      "success": "已查询"
+    },
+    {
+      "name": "takeover_compute",
+      "label": "中断接手续跑",
+      "kind": "takeover",
+      "fields": [
+        {
+          "name": "token",
+          "label": "计算号",
+          "kind": "token",
+          "initial": ""
+        }
+      ],
+      "help": "原机器中断时接手：沿用原计算号和已审签读数，接手后原机器交回的结果不再采用。",
+      "roles": [
+        "operator",
+        "reviewer"
+      ],
+      "success": "已接手"
     }
   ]
 };

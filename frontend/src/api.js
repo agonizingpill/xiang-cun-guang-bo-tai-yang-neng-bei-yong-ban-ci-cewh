@@ -17,8 +17,12 @@ export async function awaitCompute(token, report) {
   for (let i = 0; i < 40; i++) {
     const data = await request('/compute/' + token);
     report(data);
-    if (data.status !== 'queued') return data;
+    if (data.status === 'ready' || data.status === 'rejected') return data;
     await new Promise(resolve => setTimeout(resolve, 250));
   }
-  throw new Error('计算仍在排队，可回到工作页继续查询任务号');
+  throw new Error('计算仍在排队，可回到工作页按计算号查询或接手续跑');
+}
+
+export async function takeover(token) {
+  return request('/compute/' + token + '/takeover', {});
 }

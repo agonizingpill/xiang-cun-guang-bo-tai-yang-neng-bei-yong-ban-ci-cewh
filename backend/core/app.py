@@ -5,10 +5,11 @@ from fastapi import Depends, FastAPI
 from sqlalchemy import text
 
 from core import auth
+from core.audit import record
 from core.db import metadata, transaction
 from core.config import SEED_DEMO
 from core.middleware import install
-from core.queueing import broker, view
+from core.queueing import broker, claim, view
 from domain.routes import routers
 from scripts.seed_demo import seed
 
@@ -38,3 +39,12 @@ def health():
 @app.get('/compute/{token}')
 def compute(token: str, user=Depends(auth.actor)):
     return view(user, token)
+
+
+@app.post('/compute/{token}/takeover')
+def takeover(token: str, user=Depends(auth.actor)):
+    """中断续跑：沿用原计算号与冻结输入，递增 attempt 使原机器结果失效。"""
+    output = claim(user, token)
+    with transaction() as conn:
+        record(conn, user, 'compute.takeover')
+    return output
